@@ -6,6 +6,8 @@
 //  Copyright © 2015 PureSwift. All rights reserved.
 //
 
+import struct Foundation.Data
+
 internal extension String {
     
     init?(UTF8Data: Data) {
