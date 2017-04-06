@@ -43,17 +43,56 @@ extension String: JSONDecodable {
 
 extension Int: JSONEncodable {
     
-    public func toJSON() -> JSON.Value { return .integer(self) }
+    public func toJSON() -> JSON.Value { return .integer(Int64(self)) }
 }
 
+#if swift(>=3.1)
 extension Int: JSONDecodable {
     
     public init?(JSONValue: JSON.Value) {
         
-        guard let value = JSONValue.rawValue as? Int else { return nil }
+        guard let value = JSONValue.integerValue,
+            let intValue = Int(exactly: value)
+            else { return nil }
+        
+        self = intValue
+    }
+}
+#endif
+
+extension Int32: JSONEncodable {
+    
+    public func toJSON() -> JSON.Value { return .integer(Int64(self)) }
+}
+
+#if swift(>=3.1)
+    extension Int32: JSONDecodable {
+        
+        public init?(JSONValue: JSON.Value) {
+            
+            guard let value = JSONValue.integerValue,
+                let intValue = Int32(exactly: value)
+                else { return nil }
+            
+            self = intValue
+        }
+    }
+#endif
+
+extension Int64: JSONDecodable {
+    
+    public init?(JSONValue: JSON.Value) {
+        
+        guard let value = JSONValue.integerValue
+            else { return nil }
         
         self = value
     }
+}
+
+extension Int64: JSONEncodable {
+    
+    public func toJSON() -> JSON.Value { return .integer(Int64(self)) }
 }
 
 extension Double: JSONEncodable {

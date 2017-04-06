@@ -16,7 +16,7 @@ public struct JSON {
     /// JSON value type.
     ///
     /// - Note: Guarenteed to be valid JSON if root value is array or object.
-    public enum Value: RawRepresentable, Equatable, CustomStringConvertible {
+    public enum Value {
         
         /// JSON value is a null placeholder.
         case null
@@ -34,7 +34,7 @@ public struct JSON {
         case boolean(Bool)
         
         /// JSON value is a `Int`.
-        case integer(Int)
+        case integer(Int64)
         
         /// JSON value is a `Double`.
         case double(Swift.Double)
@@ -73,7 +73,7 @@ public extension JSON.Value {
         return value
     }
     
-    public var integerValue: Int? {
+    public var integerValue: Int64? {
         
         guard case let .integer(value) = self else { return nil }
         
@@ -90,9 +90,9 @@ public extension JSON.Value {
 
 // MARK: RawRepresentable
 
-public extension JSON.Value {
+extension JSON.Value: RawRepresentable {
     
-    var rawValue: Any {
+    public var rawValue: Any {
         
         switch self {
             
@@ -121,7 +121,7 @@ public extension JSON.Value {
         }
     }
     
-    init?(rawValue: Any) {
+    public init?(rawValue: Any) {
         
         guard rawValue is Null == false else {
             
@@ -135,7 +135,7 @@ public extension JSON.Value {
             return
         }
         
-        if let integer = rawValue as? Int {
+        if let integer = rawValue as? Int64 {
             
             self = .integer(integer)
             return
@@ -180,20 +180,11 @@ public extension JSON.Value {
     }
 }
 
-
-// MARK: CustomStringConvertible
-
-public extension JSON.Value {
-    
-    public var description: String {
-        
-        return "\(rawValue)"
-    }
-}
-
 // MARK: Equatable
 
-public func ==(lhs: JSON.Value, rhs: JSON.Value) -> Bool {
+extension JSON.Value: Equatable { }
+
+public func == (lhs: JSON.Value, rhs: JSON.Value) -> Bool {
     
     switch (lhs, rhs) {
         
