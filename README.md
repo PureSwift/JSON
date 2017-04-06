@@ -1,2 +1,2 @@
 # JSON
-JSON Value types for Swift
+Pure Swift JSON
