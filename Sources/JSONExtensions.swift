@@ -19,7 +19,7 @@ public protocol JSONEncodable {
 public protocol JSONDecodable {
     
     /// Decodes the reciever from JSON.
-    init?(JSONValue: JSON.Value)
+    init?(json: JSON.Value)
 }
 
 // MARK: - Primitive Types
@@ -33,7 +33,7 @@ extension String: JSONEncodable {
 
 extension String: JSONDecodable {
     
-    public init?(JSONValue: JSON.Value) {
+    public init?(json JSONValue: JSON.Value) {
         
         guard let value = JSONValue.rawValue as? String else { return nil }
         
@@ -49,7 +49,7 @@ extension Int: JSONEncodable {
 #if swift(>=3.1)
 extension Int: JSONDecodable {
     
-    public init?(JSONValue: JSON.Value) {
+    public init?(json JSONValue: JSON.Value) {
         
         guard let value = JSONValue.integerValue,
             let intValue = Int(exactly: value)
@@ -68,7 +68,7 @@ extension Int32: JSONEncodable {
 #if swift(>=3.1)
     extension Int32: JSONDecodable {
         
-        public init?(JSONValue: JSON.Value) {
+        public init?(json JSONValue: JSON.Value) {
             
             guard let value = JSONValue.integerValue,
                 let intValue = Int32(exactly: value)
@@ -81,7 +81,7 @@ extension Int32: JSONEncodable {
 
 extension Int64: JSONDecodable {
     
-    public init?(JSONValue: JSON.Value) {
+    public init?(json JSONValue: JSON.Value) {
         
         guard let value = JSONValue.integerValue
             else { return nil }
@@ -102,7 +102,7 @@ extension Double: JSONEncodable {
 
 extension Double: JSONDecodable {
     
-    public init?(JSONValue: JSON.Value) {
+    public init?(json JSONValue: JSON.Value) {
         
         guard let value = JSONValue.rawValue as? Double else { return nil }
         
@@ -117,7 +117,7 @@ extension Bool: JSONEncodable {
 
 extension Bool: JSONDecodable {
     
-    public init?(JSONValue: JSON.Value) {
+    public init?(json JSONValue: JSON.Value) {
         
         guard let value = JSONValue.rawValue as? Bool else { return nil }
         
@@ -164,7 +164,7 @@ public extension Collection where Index == DictionaryIndex<String, JSONEncodable
 public extension JSONDecodable {
     
     /// Decodes from an array of JSON values.
-    static func from(JSON array: JSON.Array) -> [Self]? {
+    static func from(json array: JSON.Array) -> [Self]? {
         
         var jsonDecodables: ContiguousArray<Self> = ContiguousArray()
         
@@ -172,7 +172,7 @@ public extension JSONDecodable {
         
         for jsonValue in array {
             
-            guard let jsonDecodable = self.init(JSONValue: jsonValue) else { return nil }
+            guard let jsonDecodable = self.init(json: jsonValue) else { return nil }
             
             jsonDecodables.append(jsonDecodable)
         }
@@ -199,9 +199,9 @@ public extension RawRepresentable where RawValue: JSONEncodable {
 public extension RawRepresentable where RawValue: JSONDecodable {
     
     /// Decodes the reciever from JSON.
-    init?(JSONValue: JSON.Value) {
+    init?(json: JSON.Value) {
         
-        guard let rawValue = RawValue(JSONValue: JSONValue) else { return nil }
+        guard let rawValue = RawValue(json: json) else { return nil }
         
         self.init(rawValue: rawValue)
     }
