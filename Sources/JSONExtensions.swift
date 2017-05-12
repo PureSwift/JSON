@@ -170,11 +170,11 @@ public extension JSONDecodable {
         
         jsonDecodables.reserveCapacity(array.count)
         
-        for jsonValue in array {
+        for (index, jsonValue) in array.enumerated() {
             
             guard let jsonDecodable = self.init(json: jsonValue) else { return nil }
             
-            jsonDecodables.append(jsonDecodable)
+            jsonDecodables[index] = jsonDecodable
         }
         
         return Array(jsonDecodables)
