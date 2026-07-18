@@ -1,0 +1,23 @@
+name: Swift Android
+on: [push]
+jobs:
+
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [debug, release]
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Swift Version
+      run: swift --version
+    - name: Build and Test
+      uses: skiptools/swift-android-action@v2
+      with:
+        swift-version: 6.3.2
+        swift-configuration: ${{ matrix.config }}
+        run-tests: true
