@@ -1,0 +1,24 @@
+name: Swift Windows
+on: [push]
+jobs:
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [debug, release]
+    steps:
+    - uses: compnerd/gha-setup-swift@main
+      with:
+        branch: swift-6.3.2-release
+        tag: 6.3.2-RELEASE
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Swift Version
+      run: swift --version
+    - name: Build
+      run: swift build -c ${{ matrix.config }}
+    - name: Test
+      run: swift test -c ${{ matrix.config }}
