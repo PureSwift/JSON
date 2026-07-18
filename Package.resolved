@@ -1,0 +1,15 @@
+{
+  "originHash" : "fcc8a689f66aa8baf0a9370257005eb2fb71df0a5014b0b2a3dfd104093ffff0",
+  "pins" : [
+    {
+      "identity" : "swift-embedded-foundation",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/PureSwift/swift-embedded-foundation.git",
+      "state" : {
+        "branch" : "master",
+        "revision" : "97d00e8795c9229828a7829a06f769eded1eedc9"
+      }
+    }
+  ],
+  "version" : 3
+}
