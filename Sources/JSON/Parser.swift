@@ -415,6 +415,9 @@ internal extension JSON.Parser {
             return .integer(integer)
         }
         // fall back to floating point for out-of-range integers
+        // - Note: Defensive guard; every number accepted by the grammar checks
+        //   above parses as `Double` (huge magnitudes clamp to infinity), so
+        //   this path is unreachable in practice and excluded from coverage.
         guard let double = Double(string) else {
             throw error(.invalidNumber)
         }
