@@ -47,6 +47,18 @@ struct JSONValueTests {
         #expect(JSON.array([.null])[1] == nil)
         #expect(JSON.array([.null])[-1] == nil)
         #expect(JSON.bool(true).stringValue == nil)
+        // wrong-type accessors return nil
+        #expect(JSON.string("a").boolValue == nil)
+        #expect(JSON.string("a").integerValue == nil)
+        #expect(JSON.string("a").doubleValue == nil)
+        #expect(JSON.string("a").arrayValue == nil)
+        #expect(JSON.string("a").objectValue == nil)
+        #expect(JSON.string("a").isNull == false)
+        #expect(JSON.array([.null]).arrayValue == [.null])
+        #expect(JSON.object(["a": .null]).objectValue == ["a": .null])
+        // subscripts on wrong types
+        #expect(JSON.string("a")["key"] == nil)
+        #expect(JSON.string("a")[0] == nil)
     }
 }
 
@@ -85,6 +97,23 @@ struct JSONParserTests {
         #expect(try JSON(parsing: #""😀""#) == .string("😀"))
         // raw UTF-8 passthrough
         #expect(try JSON(parsing: #""héllo 😀""#) == .string("héllo 😀"))
+    }
+
+    @Test func inputTypes() throws {
+        let string = #"{"a": [1]}"#
+        let expected = JSON.object(["a": .array([.integer(1)])])
+        #expect(try JSON(parsing: string) == expected)
+        #expect(try JSON(parsing: Array(string.utf8)) == expected)
+        #expect(try JSON(parsing: Data(string.utf8)) == expected)
+        #expect(try JSON(parsing: string.utf8) == expected)
+    }
+
+    @Test func unicodeEscapes() throws {
+        #expect(try JSON(parsing: #""\u0041""#) == .string("A"))                    // 1-byte UTF-8
+        #expect(try JSON(parsing: #""\u00e9""#) == .string("\u{E9}"))               // 2-byte UTF-8
+        #expect(try JSON(parsing: #""\u2764""#) == .string("\u{2764}"))             // 3-byte UTF-8
+        #expect(try JSON(parsing: #""\uD83D\uDE00""#) == .string("\u{1F600}"))      // surrogate pair, 4-byte UTF-8
+        #expect(try JSON(parsing: #""\u004A\u004a""#) == .string("JJ"))              // hex digit cases
     }
 
     @Test func fragments() throws {
@@ -156,6 +185,52 @@ struct JSONParserTests {
         }
     }
 
+    @Test func truncatedInput() {
+        let truncated = [
+            "-",                // sign without digits
+            "tru",              // literal cut short
+            "{",                // object without key
+            "{\"a\"",           // object without colon
+            "{\"a\":",          // object without value
+            "{\"a\":1",         // object without closing brace
+            "{\"a\":1,",        // object cut after comma
+            "[",                // array without values
+            "[1",               // array without closing bracket
+            "[1,",              // array cut after comma
+            "\"abc",            // unterminated string
+            "\"abc\\",          // escape at end of input
+            "\"\\u00",          // unicode escape cut short
+            "\"\\uD83D",        // high surrogate at end of input
+            "\"\\uD83D\\u"      // low surrogate cut short
+        ]
+        for string in truncated {
+            #expect(throws: JSONParseError.self, "\(string)") {
+                try JSON(parsing: string)
+            }
+        }
+    }
+
+    @Test func unexpectedCharacters() {
+        let invalid = [
+            "@",                // not a value
+            "{1: 2}",           // non-string key
+            "{\"a\": 1; }",     // bad object separator
+            "[1; 2]",           // bad array separator
+            "-x",               // sign without number
+            "0.e1",             // fraction without digits
+            "1e+",              // exponent without digits
+            "\"\\uZZZZ\"",      // invalid hex digit
+            "\"\\uD83D\\n\"",   // escape where low surrogate expected
+            "\"\\uD83D\\u0041\"", // high surrogate followed by non-surrogate escape
+            "nul1"              // corrupt literal
+        ]
+        for string in invalid {
+            #expect(throws: JSONParseError.self, "\(string)") {
+                try JSON(parsing: string)
+            }
+        }
+    }
+
     @Test func maximumDepth() throws {
         let deep = String(repeating: "[", count: 100) + String(repeating: "]", count: 100)
         #expect(throws: Never.self) {
@@ -206,6 +281,12 @@ struct JSONSerializerTests {
         #expect(JSON.double(2).toString() == "2")
         #expect(JSON.double(.infinity).toString() == "null")
         #expect(JSON.double(.nan).toString() == "null")
+    }
+
+    @Test func literals() {
+        #expect(JSON.null.toString() == "null")
+        #expect(JSON.bool(true).toString() == "true")
+        #expect(JSON.bool(false).toString() == "false")
     }
 
     @Test func prettyPrint() {
@@ -391,7 +472,8 @@ struct Base64Tests {
             (Array("foob".utf8), "Zm9vYg=="),
             (Array("fooba".utf8), "Zm9vYmE="),
             (Array("foobar".utf8), "Zm9vYmFy"),
-            ([0x00, 0xFF, 0x7F], "AP9/")
+            ([0x00, 0xFF, 0x7F], "AP9/"),
+            ([0xFB, 0xEF, 0xBE], "++++")
         ]
         for vector in vectors {
             #expect(Data(vector.bytes).encode() == .string(vector.encoded))
@@ -411,6 +493,233 @@ struct Base64Tests {
         }
         #expect(throws: JSONDecodeError.self) {
             try Data(from: .integer(1))
+        }
+        #expect(throws: JSONDecodeError.self) {
+            try Data(from: .string("Zg===")) // excess padding
+        }
+    }
+}
+
+// MARK: - Conformances
+
+@Suite
+struct JSONEncodableConformanceTests {
+
+    @Test func json() {
+        #expect(JSON.string("a").encode() == .string("a"))
+    }
+
+    @Test func optionals() {
+        #expect(Optional<Int>.none.encode() == .null)
+        #expect(Optional<Int>.some(1).encode() == .integer(1))
+    }
+
+    @Test func integers() {
+        #expect(Int(1).encode() == .integer(1))
+        #expect(Int8(-2).encode() == .integer(-2))
+        #expect(Int16(3).encode() == .integer(3))
+        #expect(Int32(-4).encode() == .integer(-4))
+        #expect(Int64(5).encode() == .integer(5))
+        #expect(UInt(6).encode() == .integer(6))
+        #expect(UInt8(7).encode() == .integer(7))
+        #expect(UInt16(8).encode() == .integer(8))
+        #expect(UInt32(9).encode() == .integer(9))
+        #expect(UInt64(10).encode() == .integer(10))
+        // values above Int64.max are clamped
+        #expect(UInt64.max.encode() == .integer(.max))
+    }
+
+    @Test func floatingPoint() {
+        #expect(Float(1.5).encode() == .double(1.5))
+        #expect(Double(2.5).encode() == .double(2.5))
+    }
+
+    @Test func other() {
+        #expect(true.encode() == .bool(true))
+        #expect("a".encode() == .string("a"))
+        #expect(Person.Role.admin.encode() == .string("admin"))
+        #expect([1, 2].encode() == .array([.integer(1), .integer(2)]))
+        #expect(["a": true].encode() == .object(["a": .bool(true)]))
+    }
+
+    @Test func keyedEncoding() {
+        // encoding into a non-object receiver replaces it with an object
+        var json = JSON.null
+        json.encode(1, forKey: Person.CodingKeys.age)
+        #expect(json == .object(["age": .integer(1)]))
+    }
+}
+
+@Suite
+struct JSONDecodableConformanceTests {
+
+    @Test func json() throws {
+        #expect(JSON(from: .string("a")) == .string("a"))
+    }
+
+    @Test func optionals() throws {
+        #expect(try Optional<Int>(from: .null) == Optional<Int>.none)
+        #expect(try Optional<Int>(from: .integer(1)) == 1)
+        #expect(throws: JSONDecodeError.self) {
+            try Optional<Int>(from: .string("a"))
+        }
+    }
+
+    @Test func rawRepresentable() throws {
+        #expect(try Person.Role(from: .string("admin")) == .admin)
+        // invalid raw value
+        #expect(throws: JSONDecodeError.self) {
+            try Person.Role(from: .string("superadmin"))
+        }
+        // invalid value type
+        #expect(throws: JSONDecodeError.self) {
+            try Person.Role(from: .integer(1))
+        }
+    }
+
+    @Test func integers() throws {
+        #expect(try Int(from: .integer(1)) == 1)
+        #expect(try Int8(from: .integer(-2)) == -2)
+        #expect(try Int16(from: .integer(3)) == 3)
+        #expect(try Int32(from: .integer(-4)) == -4)
+        #expect(try Int64(from: .integer(5)) == 5)
+        #expect(try UInt(from: .integer(6)) == 6)
+        #expect(try UInt8(from: .integer(7)) == 7)
+        #expect(try UInt16(from: .integer(8)) == 8)
+        #expect(try UInt32(from: .integer(9)) == 9)
+        #expect(try UInt64(from: .integer(10)) == 10)
+        // out of range
+        #expect(throws: JSONDecodeError.self) {
+            try Int8(from: .integer(300))
+        }
+        #expect(throws: JSONDecodeError.self) {
+            try UInt8(from: .integer(-1))
+        }
+        // invalid value type
+        #expect(throws: JSONDecodeError.self) {
+            try Int(from: .string("1"))
+        }
+    }
+
+    @Test func floatingPoint() throws {
+        #expect(try Float(from: .double(1.5)) == 1.5)
+        #expect(try Double(from: .double(2.5)) == 2.5)
+        #expect(try Double(from: .integer(2)) == 2.0)
+        #expect(throws: JSONDecodeError.self) {
+            try Float(from: .string("a"))
+        }
+        #expect(throws: JSONDecodeError.self) {
+            try Double(from: .string("a"))
+        }
+    }
+
+    @Test func other() throws {
+        #expect(try Bool(from: .bool(true)) == true)
+        #expect(try String(from: .string("a")) == "a")
+        #expect(throws: JSONDecodeError.self) {
+            try Bool(from: .integer(1))
+        }
+        #expect(throws: JSONDecodeError.self) {
+            try String(from: .integer(1))
+        }
+    }
+
+    @Test func arrays() throws {
+        #expect(try [Int](from: .array([.integer(1), .integer(2)])) == [1, 2])
+        // not an array
+        #expect(throws: JSONDecodeError.self) {
+            try [Int](from: .string("a"))
+        }
+        // invalid element
+        #expect(throws: JSONDecodeError.self) {
+            try [Int](from: .array([.integer(1), .string("a")]))
+        }
+    }
+
+    @Test func dictionaries() throws {
+        #expect(try [String: Int](from: .object(["a": .integer(1)])) == ["a": 1])
+        // not an object
+        #expect(throws: JSONDecodeError.self) {
+            try [String: Int](from: .array([]))
+        }
+        // invalid value
+        #expect(throws: JSONDecodeError.self) {
+            try [String: Int](from: .object(["a": .string("b")]))
+        }
+    }
+
+    @Test func decodeIfPresentMismatch() {
+        let json = JSON.object(["age": .string("old")])
+        #expect(throws: JSONDecodeError.typeMismatch("age", .string("old"))) {
+            try json.decodeIfPresent(UInt8.self, forKey: Person.CodingKeys.age)
+        }
+    }
+
+    @Test func decodeOnNonObject() throws {
+        #expect(throws: JSONDecodeError.keyNotFound("age")) {
+            try JSON.string("a").decode(UInt8.self, forKey: Person.CodingKeys.age)
+        }
+        #expect(try JSON.string("a").decodeIfPresent(UInt8.self, forKey: Person.CodingKeys.age) == nil)
+    }
+}
+
+// MARK: - Foundation Types
+
+@Suite
+struct JSONFoundationCodingTests {
+
+    @Test func uuid() throws {
+        let uuid = UUID()
+        #expect(uuid.encode() == .string(uuid.uuidString))
+        #expect(try UUID(from: .string(uuid.uuidString)) == uuid)
+        #expect(throws: JSONDecodeError.self) {
+            try UUID(from: .string("not a uuid"))
+        }
+        #expect(throws: JSONDecodeError.self) {
+            try UUID(from: .integer(1))
+        }
+    }
+
+    @Test func url() throws {
+        let url = URL(string: "https://pureswift.github.io")!
+        #expect(url.encode() == .string("https://pureswift.github.io"))
+        #expect(try URL(from: .string("https://pureswift.github.io")) == url)
+        #expect(throws: JSONDecodeError.self) {
+            try URL(from: .string(""))
+        }
+        #expect(throws: JSONDecodeError.self) {
+            try URL(from: .integer(1))
+        }
+    }
+
+    @Test func date() throws {
+        let date = Date(timeIntervalSince1970: 1_000_000)
+        #expect(date.encode() == .double(1_000_000))
+        #expect(try Date(from: .double(1_000_000)) == date)
+        #expect(try Date(from: .integer(1_000_000)) == date)
+        #expect(throws: JSONDecodeError.self) {
+            try Date(from: .string("a"))
+        }
+    }
+
+    @Test func data() throws {
+        let data = Data([0x00, 0x01, 0xFF])
+        #expect(data.encode() == .string("AAH/"))
+        #expect(try Data(from: .string("AAH/")) == data)
+        #expect(throws: JSONDecodeError.self) {
+            try Data(from: .integer(1))
+        }
+    }
+
+    @Test func decimal() throws {
+        let decimal = Decimal(string: "1.25")!
+        #expect(decimal.encode() == .string("1.25"))
+        #expect(try Decimal(from: .string("1.25")) == decimal)
+        #expect(throws: JSONDecodeError.self) {
+            try Decimal(from: .string("not a number"))
+        }
+        #expect(throws: JSONDecodeError.self) {
+            try Decimal(from: .integer(1))
         }
     }
 }
