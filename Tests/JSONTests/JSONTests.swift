@@ -11,7 +11,7 @@ import FoundationEssentials
 #elseif canImport(Foundation)
 import Foundation
 #endif
-@testable import JSON
+import JSON
 
 // MARK: - Value
 
@@ -381,7 +381,8 @@ struct JSONCodingTests {
 @Suite
 struct Base64Tests {
 
-    @Test func roundTrip() {
+    @Test func roundTrip() throws {
+        // exercises the internal Base64 codec through the `Data` coding API
         let vectors: [(bytes: [UInt8], encoded: String)] = [
             ([], ""),
             (Array("f".utf8), "Zg=="),
@@ -393,14 +394,23 @@ struct Base64Tests {
             ([0x00, 0xFF, 0x7F], "AP9/")
         ]
         for vector in vectors {
-            #expect(Base64.encode(vector.bytes) == vector.encoded)
-            #expect(Base64.decode(vector.encoded) == vector.bytes)
+            #expect(Data(vector.bytes).encode() == .string(vector.encoded))
+            #expect(try Data(from: .string(vector.encoded)) == Data(vector.bytes))
         }
     }
 
     @Test func invalid() {
-        #expect(Base64.decode("Zg=!") == nil)
-        #expect(Base64.decode("Zg==Zg") == nil)
-        #expect(Base64.decode("😀") == nil)
+        #expect(throws: JSONDecodeError.self) {
+            try Data(from: .string("Zg=!"))
+        }
+        #expect(throws: JSONDecodeError.self) {
+            try Data(from: .string("Zg==Zg"))
+        }
+        #expect(throws: JSONDecodeError.self) {
+            try Data(from: .string("😀"))
+        }
+        #expect(throws: JSONDecodeError.self) {
+            try Data(from: .integer(1))
+        }
     }
 }
