@@ -18,21 +18,30 @@ import FoundationEmbedded
 public extension JSON {
 
     /// Parses JSON from UTF-8 encoded text.
+    ///
+    /// Zero-copy when the collection provides contiguous storage
+    /// (e.g. `[UInt8]`, `ArraySlice<UInt8>`); otherwise the bytes
+    /// are copied into a contiguous buffer once.
     init<C>(parsing bytes: C, options: ParsingOptions = .init()) throws(JSONParseError) where C: Collection, C.Element == UInt8 {
-        var parser = Parser(bytes: Array(bytes), options: options)
-        self = try parser.parse()
+        // - Note: The closure-based buffer accessors are `rethrows`, which
+        //   erases the typed `throws(JSONParseError)` to `any Error` and
+        //   cannot compile under Embedded Swift. Capture a `Result` inside
+        //   the closure and rethrow outside with the typed `Result.get()`.
+        self = try Parser.parse(contiguous: bytes, options: options).get()
     }
 
     /// Parses JSON from a string.
     init(parsing string: String, options: ParsingOptions = .init()) throws(JSONParseError) {
-        var parser = Parser(bytes: Array(string.utf8), options: options)
-        self = try parser.parse()
+        var string = string
+        let result = string.withUTF8 { buffer in
+            Parser.parse(buffer, options: options)
+        }
+        self = try result.get()
     }
 
     /// Parses JSON from UTF-8 encoded data.
     init(parsing data: Data, options: ParsingOptions = .init()) throws(JSONParseError) {
-        var parser = Parser(bytes: Array(data), options: options)
-        self = try parser.parse()
+        self = try Parser.parse(contiguous: data, options: options).get()
     }
 }
 
@@ -56,10 +65,17 @@ public extension JSON {
 
 internal extension JSON {
 
-    /// Recursive descent JSON parser operating on UTF-8 bytes.
-    struct Parser {
+    /// Recursive descent JSON parser operating on a contiguous UTF-8 buffer.
+    ///
+    /// The cursor addresses the caller's storage directly — the input is not
+    /// copied. `~Copyable` guarantees the cursor state cannot be accidentally
+    /// duplicated. The pointer is only valid for the lifetime of the buffer
+    /// access closure in the entry points above.
+    struct Parser: ~Copyable {
 
-        let bytes: [UInt8]
+        let base: UnsafePointer<UInt8>
+
+        let count: Int
 
         let options: ParsingOptions
 
@@ -67,8 +83,9 @@ internal extension JSON {
 
         var depth: Int = 0
 
-        init(bytes: [UInt8], options: ParsingOptions) {
-            self.bytes = bytes
+        init(base: UnsafePointer<UInt8>, count: Int, options: ParsingOptions) {
+            self.base = base
+            self.count = count
             self.options = options
         }
     }
@@ -76,15 +93,38 @@ internal extension JSON {
 
 internal extension JSON.Parser {
 
+    /// Parses from any byte collection, borrowing contiguous storage when
+    /// available and copying into a contiguous buffer once otherwise.
+    static func parse<C>(contiguous bytes: C, options: JSON.ParsingOptions) -> Result<JSON, JSONParseError> where C: Collection, C.Element == UInt8 {
+        bytes.withContiguousStorageIfAvailable { buffer in
+            parse(buffer, options: options)
+        } ?? Array(bytes).withUnsafeBufferPointer { buffer in
+            parse(buffer, options: options)
+        }
+    }
+
+    /// Parses a complete document from the buffer, capturing the typed error.
+    static func parse(_ buffer: UnsafeBufferPointer<UInt8>, options: JSON.ParsingOptions) -> Result<JSON, JSONParseError> {
+        guard let base = buffer.baseAddress, buffer.count > 0 else {
+            return .failure(JSONParseError(offset: 0, reason: .emptyInput))
+        }
+        var parser = JSON.Parser(base: base, count: buffer.count, options: options)
+        do {
+            return .success(try parser.parse())
+        } catch {
+            return .failure(error)
+        }
+    }
+
     mutating func parse() throws(JSONParseError) -> JSON {
         skipWhitespace()
-        guard index < bytes.count else {
+        guard index < count else {
             throw JSONParseError(offset: 0, reason: .emptyInput)
         }
         let value = try parseValue()
         skipWhitespace()
-        guard index == bytes.count else {
-            throw error(.unexpectedCharacter(bytes[index]))
+        guard index == count else {
+            throw error(.unexpectedCharacter(base[index]))
         }
         return value
     }
@@ -94,8 +134,8 @@ internal extension JSON.Parser {
     }
 
     mutating func skipWhitespace() {
-        while index < bytes.count {
-            switch bytes[index] {
+        while index < count {
+            switch base[index] {
             case 0x20, 0x09, 0x0A, 0x0D: // space, tab, newline, carriage return
                 index += 1
             default:
@@ -105,10 +145,10 @@ internal extension JSON.Parser {
     }
 
     mutating func parseValue() throws(JSONParseError) -> JSON {
-        guard index < bytes.count else {
+        guard index < count else {
             throw error(.unexpectedEndOfInput)
         }
-        switch bytes[index] {
+        switch base[index] {
         case UInt8(ascii: "{"):
             return try parseObject()
         case UInt8(ascii: "["):
@@ -127,17 +167,17 @@ internal extension JSON.Parser {
         case UInt8(ascii: "-"), UInt8(ascii: "0") ... UInt8(ascii: "9"):
             return try parseNumber()
         default:
-            throw error(.unexpectedCharacter(bytes[index]))
+            throw error(.unexpectedCharacter(base[index]))
         }
     }
 
     mutating func parseLiteral(_ literal: StaticString) throws(JSONParseError) {
         let expected = literal.utf8Start
         for offset in 0 ..< literal.utf8CodeUnitCount {
-            guard index < bytes.count else {
+            guard index < count else {
                 throw error(.unexpectedEndOfInput)
             }
-            guard bytes[index] == expected[offset] else {
+            guard base[index] == expected[offset] else {
                 throw error(.invalidLiteral)
             }
             index += 1
@@ -147,17 +187,17 @@ internal extension JSON.Parser {
     // MARK: Object
 
     mutating func parseObject() throws(JSONParseError) -> JSON {
-        assert(bytes[index] == UInt8(ascii: "{"))
+        assert(base[index] == UInt8(ascii: "{"))
         try incrementDepth()
         defer { depth -= 1 }
         index += 1 // consume '{'
         var object = [String: JSON]()
         skipWhitespace()
-        guard index < bytes.count else {
+        guard index < count else {
             throw error(.unexpectedEndOfInput)
         }
         // empty object
-        if bytes[index] == UInt8(ascii: "}") {
+        if base[index] == UInt8(ascii: "}") {
             index += 1
             return .object(object)
         }
@@ -165,20 +205,20 @@ internal extension JSON.Parser {
             skipWhitespace()
             let key = try parseString()
             skipWhitespace()
-            guard index < bytes.count else {
+            guard index < count else {
                 throw error(.unexpectedEndOfInput)
             }
-            guard bytes[index] == UInt8(ascii: ":") else {
-                throw error(.unexpectedCharacter(bytes[index]))
+            guard base[index] == UInt8(ascii: ":") else {
+                throw error(.unexpectedCharacter(base[index]))
             }
             index += 1 // consume ':'
             skipWhitespace()
             object[key] = try parseValue()
             skipWhitespace()
-            guard index < bytes.count else {
+            guard index < count else {
                 throw error(.unexpectedEndOfInput)
             }
-            switch bytes[index] {
+            switch base[index] {
             case UInt8(ascii: ","):
                 index += 1
                 continue
@@ -186,7 +226,7 @@ internal extension JSON.Parser {
                 index += 1
                 return .object(object)
             default:
-                throw error(.unexpectedCharacter(bytes[index]))
+                throw error(.unexpectedCharacter(base[index]))
             }
         } while true
     }
@@ -194,17 +234,17 @@ internal extension JSON.Parser {
     // MARK: Array
 
     mutating func parseArray() throws(JSONParseError) -> JSON {
-        assert(bytes[index] == UInt8(ascii: "["))
+        assert(base[index] == UInt8(ascii: "["))
         try incrementDepth()
         defer { depth -= 1 }
         index += 1 // consume '['
         var array = [JSON]()
         skipWhitespace()
-        guard index < bytes.count else {
+        guard index < count else {
             throw error(.unexpectedEndOfInput)
         }
         // empty array
-        if bytes[index] == UInt8(ascii: "]") {
+        if base[index] == UInt8(ascii: "]") {
             index += 1
             return .array(array)
         }
@@ -212,10 +252,10 @@ internal extension JSON.Parser {
             skipWhitespace()
             array.append(try parseValue())
             skipWhitespace()
-            guard index < bytes.count else {
+            guard index < count else {
                 throw error(.unexpectedEndOfInput)
             }
-            switch bytes[index] {
+            switch base[index] {
             case UInt8(ascii: ","):
                 index += 1
                 continue
@@ -223,7 +263,7 @@ internal extension JSON.Parser {
                 index += 1
                 return .array(array)
             default:
-                throw error(.unexpectedCharacter(bytes[index]))
+                throw error(.unexpectedCharacter(base[index]))
             }
         } while true
     }
@@ -238,16 +278,16 @@ internal extension JSON.Parser {
     // MARK: String
 
     mutating func parseString() throws(JSONParseError) -> String {
-        guard index < bytes.count else {
+        guard index < count else {
             throw error(.unexpectedEndOfInput)
         }
-        guard bytes[index] == UInt8(ascii: "\"") else {
-            throw error(.unexpectedCharacter(bytes[index]))
+        guard base[index] == UInt8(ascii: "\"") else {
+            throw error(.unexpectedCharacter(base[index]))
         }
         index += 1 // consume '"'
         var utf8 = [UInt8]()
-        while index < bytes.count {
-            let byte = bytes[index]
+        while index < count {
+            let byte = base[index]
             switch byte {
             case UInt8(ascii: "\""):
                 index += 1
@@ -267,10 +307,10 @@ internal extension JSON.Parser {
     }
 
     mutating func parseEscape(into utf8: inout [UInt8]) throws(JSONParseError) {
-        guard index < bytes.count else {
+        guard index < count else {
             throw error(.unexpectedEndOfInput)
         }
-        let byte = bytes[index]
+        let byte = base[index]
         index += 1
         switch byte {
         case UInt8(ascii: "\""):
@@ -293,9 +333,9 @@ internal extension JSON.Parser {
             var scalar = try parseUnicodeEscape()
             // surrogate pair
             if scalar >= 0xD800, scalar <= 0xDBFF {
-                guard index + 1 < bytes.count,
-                      bytes[index] == UInt8(ascii: "\\"),
-                      bytes[index + 1] == UInt8(ascii: "u")
+                guard index + 1 < count,
+                      base[index] == UInt8(ascii: "\\"),
+                      base[index + 1] == UInt8(ascii: "u")
                     else { throw error(.invalidUnicode) }
                 index += 2 // consume "\u"
                 let low = try parseUnicodeEscape()
@@ -317,10 +357,10 @@ internal extension JSON.Parser {
     mutating func parseUnicodeEscape() throws(JSONParseError) -> UInt32 {
         var value: UInt32 = 0
         for _ in 0 ..< 4 {
-            guard index < bytes.count else {
+            guard index < count else {
                 throw error(.unexpectedEndOfInput)
             }
-            let byte = bytes[index]
+            let byte = base[index]
             let digit: UInt32
             switch byte {
             case UInt8(ascii: "0") ... UInt8(ascii: "9"):
@@ -364,53 +404,53 @@ internal extension JSON.Parser {
         let start = index
         var isDouble = false
         // sign
-        if bytes[index] == UInt8(ascii: "-") {
+        if base[index] == UInt8(ascii: "-") {
             index += 1
         }
         // integer part
-        guard index < bytes.count else {
+        guard index < count else {
             throw error(.unexpectedEndOfInput)
         }
-        switch bytes[index] {
+        switch base[index] {
         case UInt8(ascii: "0"):
             index += 1
             // leading zeros are invalid
-            if index < bytes.count, case UInt8(ascii: "0") ... UInt8(ascii: "9") = bytes[index] {
+            if index < count, case UInt8(ascii: "0") ... UInt8(ascii: "9") = base[index] {
                 throw error(.invalidNumber)
             }
         case UInt8(ascii: "1") ... UInt8(ascii: "9"):
             repeat {
                 index += 1
-            } while index < bytes.count && isDigit(bytes[index])
+            } while index < count && isDigit(base[index])
         default:
             throw error(.invalidNumber)
         }
         // fraction
-        if index < bytes.count, bytes[index] == UInt8(ascii: ".") {
+        if index < count, base[index] == UInt8(ascii: ".") {
             isDouble = true
             index += 1
-            guard index < bytes.count, isDigit(bytes[index]) else {
+            guard index < count, isDigit(base[index]) else {
                 throw error(.invalidNumber)
             }
             repeat {
                 index += 1
-            } while index < bytes.count && isDigit(bytes[index])
+            } while index < count && isDigit(base[index])
         }
         // exponent
-        if index < bytes.count, bytes[index] == UInt8(ascii: "e") || bytes[index] == UInt8(ascii: "E") {
+        if index < count, base[index] == UInt8(ascii: "e") || base[index] == UInt8(ascii: "E") {
             isDouble = true
             index += 1
-            if index < bytes.count, bytes[index] == UInt8(ascii: "+") || bytes[index] == UInt8(ascii: "-") {
+            if index < count, base[index] == UInt8(ascii: "+") || base[index] == UInt8(ascii: "-") {
                 index += 1
             }
-            guard index < bytes.count, isDigit(bytes[index]) else {
+            guard index < count, isDigit(base[index]) else {
                 throw error(.invalidNumber)
             }
             repeat {
                 index += 1
-            } while index < bytes.count && isDigit(bytes[index])
+            } while index < count && isDigit(base[index])
         }
-        let string = String(decoding: bytes[start ..< index], as: UTF8.self)
+        let string = String(decoding: UnsafeBufferPointer(start: base + start, count: index - start), as: UTF8.self)
         if isDouble == false, let integer = Int64(string) {
             return .integer(integer)
         }
