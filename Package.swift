@@ -6,6 +6,10 @@ import class Foundation.ProcessInfo
 // get environment variables
 let environment = ProcessInfo.processInfo.environment
 let enableMacros = environment["SWIFTPM_ENABLE_MACROS"] != "0"
+// the macro expansion tests use swift-syntax host tooling and cannot be
+// cross-compiled for Android (fully compiled-out test files break the
+// index store during test discovery)
+let android = environment["TARGET_OS_ANDROID"] == "1"
 
 let package = Package(
     name: "JSON",
@@ -82,28 +86,32 @@ if enableMacros {
                     package: "swift-syntax"
                 )
             ]
-        ),
-        .testTarget(
-            name: "JSONMacrosTests",
-            dependencies: [
-                "JSONMacros",
-                .product(
-                    name: "SwiftSyntaxMacros",
-                    package: "swift-syntax"
-                ),
-                .product(
-                    name: "SwiftSyntaxMacroExpansion",
-                    package: "swift-syntax"
-                ),
-                .product(
-                    name: "SwiftParser",
-                    package: "swift-syntax"
-                ),
-                .product(
-                    name: "SwiftSyntaxMacrosTestSupport",
-                    package: "swift-syntax"
-                )
-            ]
         )
     ]
+    if android == false {
+        package.targets += [
+            .testTarget(
+                name: "JSONMacrosTests",
+                dependencies: [
+                    "JSONMacros",
+                    .product(
+                        name: "SwiftSyntaxMacros",
+                        package: "swift-syntax"
+                    ),
+                    .product(
+                        name: "SwiftSyntaxMacroExpansion",
+                        package: "swift-syntax"
+                    ),
+                    .product(
+                        name: "SwiftParser",
+                        package: "swift-syntax"
+                    ),
+                    .product(
+                        name: "SwiftSyntaxMacrosTestSupport",
+                        package: "swift-syntax"
+                    )
+                ]
+            )
+        ]
+    }
 }
