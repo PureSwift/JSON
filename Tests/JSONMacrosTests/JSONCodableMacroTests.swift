@@ -7,15 +7,16 @@
 
 // Macro expansion tests depend on the swift-syntax host tooling and only run
 // where the test suite is executed (macOS and Linux); other CI platforms
-// cross-compile the package and never run `swift test`.
-#if os(macOS) || os(Linux)
+// cross-compile the package and never run `swift test`. Android also matches
+// `os(Linux)` when cross-compiling, so it is excluded explicitly.
+#if (os(macOS) || os(Linux)) && !os(Android)
 
 import XCTest
 import SwiftSyntax
 import SwiftParser
 import SwiftSyntaxMacros
 import SwiftSyntaxMacroExpansion
-@testable import JSONMacros
+import JSONMacros
 
 final class JSONCodableMacroTests: XCTestCase {
 
