@@ -85,6 +85,7 @@ struct JSONParserTests {
         #expect(try JSON(parsing: "[1.5E-1]") == .array([.double(0.15)]))
         // 64-bit overflow falls back to double
         #expect(try JSON(parsing: "[18446744073709551615]") == .array([.double(18446744073709551615)]))
+        #expect(try JSON(parsing: "[-18446744073709551615]") == .array([.double(-18446744073709551615)]))
     }
 
     @Test func strings() throws {
@@ -106,6 +107,10 @@ struct JSONParserTests {
         #expect(try JSON(parsing: Array(string.utf8)) == expected)
         #expect(try JSON(parsing: Data(string.utf8)) == expected)
         #expect(try JSON(parsing: string.utf8) == expected)
+        // non-contiguous collection takes the copying fallback path
+        let half = Array(string.utf8).count / 2
+        let nonContiguous = [Array(string.utf8)[..<half], Array(string.utf8)[half...]].joined()
+        #expect(try JSON(parsing: nonContiguous) == expected)
     }
 
     @Test func unicodeEscapes() throws {
@@ -179,6 +184,12 @@ struct JSONParserTests {
         }
         #expect(throws: JSONParseError.self) {
             try JSON(parsing: "\"a\nb\"") // unescaped control character
+        }
+        #expect(throws: JSONParseError.self) {
+            try JSON(parsing: "\"a\\n\u{01}b\"") // control character after an escape
+        }
+        #expect(throws: JSONParseError.self) {
+            try JSON(parsing: "\"a\\nbc") // unterminated string containing an escape
         }
         #expect(throws: JSONParseError.self) {
             try JSON(parsing: "[1] [2]") // trailing content
