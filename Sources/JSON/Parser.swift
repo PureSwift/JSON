@@ -415,6 +415,11 @@ internal extension JSON.Parser {
             return .integer(integer)
         }
         // fall back to floating point for out-of-range integers
+        #if hasFeature(Embedded)
+        // `Double.init(String)` requires `_swift_stdlib_strtod_clocale`, which
+        // the Embedded Swift runtime does not provide, so convert manually.
+        return .double(JSON.double(parsing: bytes[start ..< index]))
+        #else
         // - Note: Defensive guard; every number accepted by the grammar checks
         //   above parses as `Double` (huge magnitudes clamp to infinity), so
         //   this path is unreachable in practice and excluded from coverage.
@@ -422,9 +427,75 @@ internal extension JSON.Parser {
             throw error(.invalidNumber)
         }
         return .double(double)
+        #endif
     }
 
     func isDigit(_ byte: UInt8) -> Bool {
         byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9")
+    }
+}
+
+extension JSON {
+
+    /// Converts grammar-validated JSON number bytes to a `Double` without
+    /// `Double.init(String)`, which is unavailable under Embedded Swift.
+    ///
+    /// Accumulates up to 19 significant digits into a `UInt64` mantissa and
+    /// scales by the decimal exponent, so the result can differ from the
+    /// correctly rounded value by ~1 ulp for long inputs.
+    @_spi(Testing)
+    public static func double<S>(parsing bytes: S) -> Double where S: Sequence, S.Element == UInt8 {
+        var mantissa: UInt64 = 0
+        var digitCount = 0
+        var exponent = 0
+        var explicitExponent = 0
+        var negative = false
+        var negativeExponent = false
+        var inFraction = false
+        var inExponent = false
+        for byte in bytes {
+            switch byte {
+            case UInt8(ascii: "-"):
+                if inExponent { negativeExponent = true } else { negative = true }
+            case UInt8(ascii: "+"):
+                break
+            case UInt8(ascii: "."):
+                inFraction = true
+            case UInt8(ascii: "e"), UInt8(ascii: "E"):
+                inExponent = true
+            case UInt8(ascii: "0") ... UInt8(ascii: "9"):
+                let digit = Int(byte - UInt8(ascii: "0"))
+                if inExponent {
+                    // clamp to avoid overflow; ±9999 already saturates Double
+                    explicitExponent = min(explicitExponent * 10 + digit, 9999)
+                } else if digitCount < 19, mantissa != 0 || digit != 0 {
+                    mantissa = mantissa * 10 + UInt64(digit)
+                    digitCount += 1
+                    if inFraction { exponent -= 1 }
+                } else if mantissa == 0 {
+                    // leading zeros contribute only to the exponent
+                    if inFraction { exponent -= 1 }
+                } else if inFraction == false {
+                    // digits beyond the mantissa's precision shift the exponent
+                    exponent += 1
+                }
+            default:
+                break
+            }
+        }
+        exponent += negativeExponent ? -explicitExponent : explicitExponent
+        var value = Double(mantissa)
+        // scale by 10^exponent via exponentiation by squaring;
+        // overflow and underflow saturate to infinity and zero
+        var power = 10.0
+        var remaining = exponent.magnitude
+        while remaining > 0 {
+            if remaining & 1 == 1 {
+                value = exponent < 0 ? value / power : value * power
+            }
+            remaining >>= 1
+            if remaining > 0 { power *= power }
+        }
+        return negative ? -value : value
     }
 }

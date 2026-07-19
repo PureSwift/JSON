@@ -40,7 +40,27 @@ Parsing throws typed errors (`throws(JSONParseError)`) with byte offset and reas
 
 ### Encoding and decoding
 
-Conform your types to `JSONEncodable` and `JSONDecodable` with hand-written implementations. (Macro-generated conformances are planned for a future release.)
+Attach the `@JSONCodable` macro to a struct or class to generate `JSONEncodable` and `JSONDecodable` conformance from its stored properties:
+
+```swift
+@JSONCodable
+struct Product {
+
+    let id: UUID
+    var name: String
+    var price: Double
+    var quantity: UInt16?
+}
+
+let product = try Product(from: JSON(parsing: string))
+let string = product.encode().toString()
+```
+
+The macro generates a `CodingKeys` enum, `init(from:)` and `encode()`. Optional properties are omitted when `nil` and decode as `nil` when absent or `null`. For structs the members are generated in an extension, so the compiler's memberwise initializer is preserved.
+
+Macros are enabled by default and require swift-syntax at build time; pass `SWIFTPM_ENABLE_MACROS=0` to build without them (required for Embedded Swift, where you hand-write the conformances instead).
+
+Alternatively, conform your types to `JSONEncodable` and `JSONDecodable` with hand-written implementations:
 
 ```swift
 struct Person: JSONEncodable, JSONDecodable {
@@ -91,6 +111,18 @@ Build with the Embedded WebAssembly SDK:
 swift sdk install https://download.swift.org/swift-6.3.3-release/wasm-sdk/swift-6.3.3-RELEASE/swift-6.3.3-RELEASE_wasm.artifactbundle.tar.gz
 ./build-embedded.sh
 ```
+
+### Linking executables
+
+Embedded **executables** using this library must link the Swift toolchain's Unicode data tables — `String`'s `Hashable`/`Comparable` conformances (used by `[String: JSON]` objects and `sortedKeys`) depend on Unicode normalization symbols that the Embedded stdlib does not embed by default:
+
+```sh
+swift build --swift-sdk <embedded-sdk> \
+    -Xlinker -L<toolchain>/usr/lib/swift/embedded/<target-triple> \
+    -Xlinker -lswiftUnicodeDataTables
+```
+
+The library itself avoids the other common Embedded linking gap: `Double.init(String)` requires `_swift_stdlib_strtod_clocale`, which no Embedded runtime library provides, so the JSON parser converts floating point numbers with its own pure-Swift implementation under Embedded Swift.
 
 ## Installation
 

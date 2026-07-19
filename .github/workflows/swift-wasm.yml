@@ -55,6 +55,7 @@ jobs:
         swift sdk list
     - name: Build
       run: >-
+        SWIFTPM_ENABLE_MACROS=0
         swift build
         -c ${{ matrix.config }}
         --swift-sdk swift-6.3.3-RELEASE_wasm-embedded
