@@ -85,6 +85,7 @@ struct JSONParserTests {
         #expect(try JSON(parsing: "[1.5E-1]") == .array([.double(0.15)]))
         // 64-bit overflow falls back to double
         #expect(try JSON(parsing: "[18446744073709551615]") == .array([.double(18446744073709551615)]))
+        #expect(try JSON(parsing: "[-18446744073709551615]") == .array([.double(-18446744073709551615)]))
     }
 
     @Test func strings() throws {
@@ -183,6 +184,12 @@ struct JSONParserTests {
         }
         #expect(throws: JSONParseError.self) {
             try JSON(parsing: "\"a\nb\"") // unescaped control character
+        }
+        #expect(throws: JSONParseError.self) {
+            try JSON(parsing: "\"a\\n\u{01}b\"") // control character after an escape
+        }
+        #expect(throws: JSONParseError.self) {
+            try JSON(parsing: "\"a\\nbc") // unterminated string containing an escape
         }
         #expect(throws: JSONParseError.self) {
             try JSON(parsing: "[1] [2]") // trailing content
