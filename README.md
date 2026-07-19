@@ -40,7 +40,27 @@ Parsing throws typed errors (`throws(JSONParseError)`) with byte offset and reas
 
 ### Encoding and decoding
 
-Conform your types to `JSONEncodable` and `JSONDecodable` with hand-written implementations. (Macro-generated conformances are planned for a future release.)
+Attach the `@JSONCodable` macro to a struct or class to generate `JSONEncodable` and `JSONDecodable` conformance from its stored properties:
+
+```swift
+@JSONCodable
+struct Product {
+
+    let id: UUID
+    var name: String
+    var price: Double
+    var quantity: UInt16?
+}
+
+let product = try Product(from: JSON(parsing: string))
+let string = product.encode().toString()
+```
+
+The macro generates a `CodingKeys` enum, `init(from:)` and `encode()`. Optional properties are omitted when `nil` and decode as `nil` when absent or `null`. For structs the members are generated in an extension, so the compiler's memberwise initializer is preserved.
+
+Macros are enabled by default and require swift-syntax at build time; pass `SWIFTPM_ENABLE_MACROS=0` to build without them (required for Embedded Swift, where you hand-write the conformances instead).
+
+Alternatively, conform your types to `JSONEncodable` and `JSONDecodable` with hand-written implementations:
 
 ```swift
 struct Person: JSONEncodable, JSONDecodable {
