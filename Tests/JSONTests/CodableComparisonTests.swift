@@ -168,18 +168,26 @@ struct CodableComparisonTests {
             _ = try JSONEncoder().encode(items)
         }
 
+        // Rounds to `places` decimals for display. `String(format:)` is avoided
+        // because it lives in full Foundation, not FoundationEssentials, so it
+        // is unavailable on platforms (Android, Windows) that import the latter.
+        func rounded(_ value: Double, _ places: Int) -> Double {
+            var factor = 1.0
+            for _ in 0 ..< places { factor *= 10 }
+            return (value * factor).rounded() / factor
+        }
         func report(_ name: String, _ seconds: Double) {
-            let ms = seconds * 1000
-            let throughput = megabytes / seconds
-            print(String(format: "%@: %.3f ms (%.1f MB/s)", name, ms, throughput))
+            let ms = rounded(seconds * 1000, 3)
+            let throughput = rounded(megabytes / seconds, 1)
+            print("\(name): \(ms) ms (\(throughput) MB/s)")
         }
         print("Codable comparison — \(data.count) bytes, \(items.count) items")
         report("decode  JSON library    ", oursDecode)
         report("decode  Foundation      ", foundationDecode)
         report("encode  JSON library    ", oursEncode)
         report("encode  Foundation      ", foundationEncode)
-        print(String(format: "decode ratio (ours/Foundation): %.2f×", oursDecode / foundationDecode))
-        print(String(format: "encode ratio (ours/Foundation): %.2f×", oursEncode / foundationEncode))
+        print("decode ratio (ours/Foundation): \(rounded(oursDecode / foundationDecode, 2))×")
+        print("encode ratio (ours/Foundation): \(rounded(oursEncode / foundationEncode, 2))×")
     }
     #endif
 }
