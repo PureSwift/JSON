@@ -11,7 +11,7 @@ import FoundationEssentials
 #elseif canImport(Foundation)
 import Foundation
 #endif
-import JSON
+@_spi(Testing) import JSON
 
 // MARK: - Value
 
@@ -229,6 +229,31 @@ struct JSONParserTests {
                 try JSON(parsing: string)
             }
         }
+    }
+
+    @Test func embeddedDoubleConversion() {
+        // the manual conversion used under Embedded Swift, validated
+        // against the stdlib's correctly rounded `Double.init(String)`
+        let exact = [
+            "0.0", "-0.0", "1.5", "-0.25", "0.15", "1e3", "1.5E-1", "1e-3",
+            "0.001", "12.34", "3.14159265358979", "2.5e10", "-2.5e-10",
+            "18446744073709551615", "1e999", "-1e999", "1e-999", "123456789.123456789"
+        ]
+        for string in exact {
+            let expected = Double(string)!
+            let value = JSON.double(parsing: Array(string.utf8))
+            #expect(
+                value == expected || abs(value - expected) <= expected.ulp,
+                "\(string): \(value) != \(expected)"
+            )
+        }
+        // saturation
+        #expect(JSON.double(parsing: Array("1e9999".utf8)) == .infinity)
+        #expect(JSON.double(parsing: Array("-1e9999".utf8)) == -.infinity)
+        #expect(JSON.double(parsing: Array("1e-9999".utf8)) == 0)
+        // mantissa overflow shifts into the exponent
+        let long = "123456789012345678901234567890"
+        #expect(abs(JSON.double(parsing: Array(long.utf8)) - Double(long)!) <= Double(long)!.ulp)
     }
 
     @Test func maximumDepth() throws {
