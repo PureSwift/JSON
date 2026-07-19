@@ -302,10 +302,22 @@ struct JSONSerializerTests {
 
     @Test func numbers() {
         #expect(JSON.integer(42).toString() == "42")
+        #expect(JSON.integer(0).toString() == "0")
+        #expect(JSON.integer(-7).toString() == "-7")
+        #expect(JSON.integer(.max).toString() == "9223372036854775807")
+        #expect(JSON.integer(.min).toString() == "-9223372036854775808")
         #expect(JSON.double(1.5).toString() == "1.5")
         #expect(JSON.double(2).toString() == "2")
+        #expect(JSON.double(0).toString() == "0")
         #expect(JSON.double(.infinity).toString() == "null")
         #expect(JSON.double(.nan).toString() == "null")
+    }
+
+    @Test func strings() {
+        #expect(JSON.string("").toString() == "\"\"")
+        #expect(JSON.string("plain").toString() == "\"plain\"")
+        #expect(JSON.string("a\"b\\c").toString() == #""a\"b\\c""#)
+        #expect(JSON.string("é😀").toString() == "\"é😀\"")
     }
 
     @Test func literals() {

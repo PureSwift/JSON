@@ -21,16 +21,20 @@ public extension JSON {
     ///
     /// The output strictly conforms to [RFC 8259](https://tools.ietf.org/html/rfc8259).
     func toString(options: SerializationOptions = []) -> String {
-        var output = ""
+        var output = [UInt8]()
+        output.reserveCapacity(256)
         write(to: &output, options: options, indentation: 0)
-        return output
+        return String(decoding: output, as: UTF8.self)
     }
 
     /// Serializes the JSON value as UTF-8 encoded data.
     ///
     /// The output strictly conforms to [RFC 8259](https://tools.ietf.org/html/rfc8259).
     func toData(options: SerializationOptions = []) -> Data {
-        Data(toString(options: options).utf8)
+        var output = [UInt8]()
+        output.reserveCapacity(256)
+        write(to: &output, options: options, indentation: 0)
+        return Data(output)
     }
 }
 
@@ -59,14 +63,17 @@ public extension JSON {
 
 internal extension JSON {
 
-    func write(to output: inout String, options: SerializationOptions, indentation: Int) {
+    /// Lowercase hexadecimal digits for `\u00XX` control-character escapes.
+    static let hexDigits: [UInt8] = Array("0123456789abcdef".utf8)
+
+    func write(to output: inout [UInt8], options: SerializationOptions, indentation: Int) {
         switch self {
         case .null:
-            output += "null"
+            output.append(contentsOf: "null".utf8)
         case let .bool(value):
-            output += value ? "true" : "false"
+            output.append(contentsOf: (value ? "true" : "false").utf8)
         case let .integer(value):
-            output += value.description
+            JSON.write(value, to: &output)
         case let .double(value):
             JSON.write(value, to: &output)
         case let .string(value):
@@ -78,58 +85,124 @@ internal extension JSON {
         }
     }
 
-    static func write(_ value: Double, to output: inout String) {
+    // MARK: Number
+
+    /// Writes the decimal representation of a signed integer.
+    static func write(_ value: Int64, to output: inout [UInt8]) {
+        let magnitude: UInt64
+        if value < 0 {
+            output.append(UInt8(ascii: "-"))
+            // negate via unsigned to represent `Int64.min` without overflow
+            magnitude = 0 &- UInt64(bitPattern: value)
+        } else {
+            magnitude = UInt64(bitPattern: value)
+        }
+        write(magnitude, to: &output)
+    }
+
+    /// Writes the decimal representation of an unsigned integer, most
+    /// significant digit first, using a stack buffer (no heap allocation).
+    static func write(_ magnitude: UInt64, to output: inout [UInt8]) {
+        if magnitude == 0 {
+            output.append(UInt8(ascii: "0"))
+            return
+        }
+        // `UInt64.max` is 20 decimal digits.
+        withUnsafeTemporaryAllocation(of: UInt8.self, capacity: 20) { buffer in
+            var index = 20
+            var remaining = magnitude
+            while remaining > 0 {
+                index -= 1
+                buffer[index] = UInt8(ascii: "0") &+ UInt8(remaining % 10)
+                remaining /= 10
+            }
+            output.append(contentsOf: UnsafeBufferPointer(start: buffer.baseAddress! + index, count: 20 - index))
+        }
+    }
+
+    static func write(_ value: Double, to output: inout [UInt8]) {
         if let integer = Int64(exactly: value) {
             // avoid trailing ".0" for whole numbers
-            output += integer.description
+            write(integer, to: &output)
         } else if value.isFinite {
-            output += value.description
+            output.append(contentsOf: value.description.utf8)
         } else {
             // Infinity and NaN are not representable in JSON
-            output += "null"
+            output.append(contentsOf: "null".utf8)
         }
     }
 
-    static func write(_ string: String, to output: inout String) {
-        let hexDigits: [Character] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
-        output += "\""
-        for scalar in string.unicodeScalars {
-            switch scalar.value {
-            case UInt32(UInt8(ascii: "\"")):
-                output += "\\\""
-            case UInt32(UInt8(ascii: "\\")):
-                output += "\\\\"
-            case 0x08:
-                output += "\\b"
-            case 0x0C:
-                output += "\\f"
-            case 0x0A:
-                output += "\\n"
-            case 0x0D:
-                output += "\\r"
-            case 0x09:
-                output += "\\t"
-            case 0x00 ... 0x1F:
-                output += "\\u00"
-                output.append(hexDigits[Int(scalar.value >> 4)])
-                output.append(hexDigits[Int(scalar.value & 0xF)])
-            default:
-                output.unicodeScalars.append(scalar)
+    // MARK: String
+
+    static func write(_ string: String, to output: inout [UInt8]) {
+        output.append(UInt8(ascii: "\""))
+        var string = string
+        string.withUTF8 { utf8 in
+            guard let base = utf8.baseAddress else { return }
+            let count = utf8.count
+            var runStart = 0
+            var index = 0
+            while index < count {
+                let byte = utf8[index]
+                // only ASCII quote, backslash and control characters need
+                // escaping; every UTF-8 continuation/lead byte is >= 0x80
+                if byte == UInt8(ascii: "\"") || byte == UInt8(ascii: "\\") || byte < 0x20 {
+                    if index > runStart {
+                        output.append(contentsOf: UnsafeBufferPointer(start: base + runStart, count: index - runStart))
+                    }
+                    writeEscape(byte, to: &output)
+                    index += 1
+                    runStart = index
+                } else {
+                    index += 1
+                }
+            }
+            if index > runStart {
+                output.append(contentsOf: UnsafeBufferPointer(start: base + runStart, count: index - runStart))
             }
         }
-        output += "\""
+        output.append(UInt8(ascii: "\""))
     }
 
-    static func write(_ array: [JSON], to output: inout String, options: SerializationOptions, indentation: Int) {
+    static func writeEscape(_ byte: UInt8, to output: inout [UInt8]) {
+        output.append(UInt8(ascii: "\\"))
+        switch byte {
+        case UInt8(ascii: "\""):
+            output.append(UInt8(ascii: "\""))
+        case UInt8(ascii: "\\"):
+            output.append(UInt8(ascii: "\\"))
+        case 0x08:
+            output.append(UInt8(ascii: "b"))
+        case 0x0C:
+            output.append(UInt8(ascii: "f"))
+        case 0x0A:
+            output.append(UInt8(ascii: "n"))
+        case 0x0D:
+            output.append(UInt8(ascii: "r"))
+        case 0x09:
+            output.append(UInt8(ascii: "t"))
+        default:
+            // other control characters: \u00XX
+            output.append(UInt8(ascii: "u"))
+            output.append(UInt8(ascii: "0"))
+            output.append(UInt8(ascii: "0"))
+            output.append(hexDigits[Int(byte >> 4)])
+            output.append(hexDigits[Int(byte & 0xF)])
+        }
+    }
+
+    // MARK: Containers
+
+    static func write(_ array: [JSON], to output: inout [UInt8], options: SerializationOptions, indentation: Int) {
         guard array.isEmpty == false else {
-            output += "[]"
+            output.append(contentsOf: "[]".utf8)
             return
         }
         let prettyPrint = options.contains(.prettyPrint)
-        output += "["
+        output.append(UInt8(ascii: "["))
         for (index, value) in array.enumerated() {
             if index > 0 {
-                output += ","
+                output.append(UInt8(ascii: ","))
             }
             if prettyPrint {
                 newline(to: &output, indentation: indentation + 1)
@@ -139,12 +212,12 @@ internal extension JSON {
         if prettyPrint {
             newline(to: &output, indentation: indentation)
         }
-        output += "]"
+        output.append(UInt8(ascii: "]"))
     }
 
-    static func write(_ object: [String: JSON], to output: inout String, options: SerializationOptions, indentation: Int) {
+    static func write(_ object: [String: JSON], to output: inout [UInt8], options: SerializationOptions, indentation: Int) {
         guard object.isEmpty == false else {
-            output += "{}"
+            output.append(contentsOf: "{}".utf8)
             return
         }
         let prettyPrint = options.contains(.prettyPrint)
@@ -152,28 +225,32 @@ internal extension JSON {
         if options.contains(.sortedKeys) {
             keys.sort()
         }
-        output += "{"
+        output.append(UInt8(ascii: "{"))
         for (index, key) in keys.enumerated() {
             if index > 0 {
-                output += ","
+                output.append(UInt8(ascii: ","))
             }
             if prettyPrint {
                 newline(to: &output, indentation: indentation + 1)
             }
             write(key, to: &output)
-            output += prettyPrint ? ": " : ":"
+            output.append(UInt8(ascii: ":"))
+            if prettyPrint {
+                output.append(UInt8(ascii: " "))
+            }
             object[key]?.write(to: &output, options: options, indentation: indentation + 1)
         }
         if prettyPrint {
             newline(to: &output, indentation: indentation)
         }
-        output += "}"
+        output.append(UInt8(ascii: "}"))
     }
 
-    static func newline(to output: inout String, indentation: Int) {
-        output += "\n"
+    static func newline(to output: inout [UInt8], indentation: Int) {
+        output.append(UInt8(ascii: "\n"))
         for _ in 0 ..< indentation {
-            output += "  "
+            output.append(UInt8(ascii: " "))
+            output.append(UInt8(ascii: " "))
         }
     }
 }
