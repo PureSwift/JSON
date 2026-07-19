@@ -112,6 +112,18 @@ swift sdk install https://download.swift.org/swift-6.3.3-release/wasm-sdk/swift-
 ./build-embedded.sh
 ```
 
+### Linking executables
+
+Embedded **executables** using this library must link the Swift toolchain's Unicode data tables — `String`'s `Hashable`/`Comparable` conformances (used by `[String: JSON]` objects and `sortedKeys`) depend on Unicode normalization symbols that the Embedded stdlib does not embed by default:
+
+```sh
+swift build --swift-sdk <embedded-sdk> \
+    -Xlinker -L<toolchain>/usr/lib/swift/embedded/<target-triple> \
+    -Xlinker -lswiftUnicodeDataTables
+```
+
+The library itself avoids the other common Embedded linking gap: `Double.init(String)` requires `_swift_stdlib_strtod_clocale`, which no Embedded runtime library provides, so the JSON parser converts floating point numbers with its own pure-Swift implementation under Embedded Swift.
+
 ## Installation
 
 Add to your `Package.swift`:
