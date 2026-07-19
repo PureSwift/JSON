@@ -106,6 +106,10 @@ struct JSONParserTests {
         #expect(try JSON(parsing: Array(string.utf8)) == expected)
         #expect(try JSON(parsing: Data(string.utf8)) == expected)
         #expect(try JSON(parsing: string.utf8) == expected)
+        // non-contiguous collection takes the copying fallback path
+        let half = Array(string.utf8).count / 2
+        let nonContiguous = [Array(string.utf8)[..<half], Array(string.utf8)[half...]].joined()
+        #expect(try JSON(parsing: nonContiguous) == expected)
     }
 
     @Test func unicodeEscapes() throws {
