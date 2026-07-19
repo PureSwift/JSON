@@ -129,10 +129,12 @@ internal extension JSON.Parser {
         return value
     }
 
+    @inline(__always)
     func error(_ reason: JSONParseError.Reason) -> JSONParseError {
         JSONParseError(offset: index, reason: reason)
     }
 
+    @inline(__always)
     mutating func skipWhitespace() {
         while index < count {
             switch base[index] {
@@ -186,12 +188,14 @@ internal extension JSON.Parser {
 
     // MARK: Object
 
+    @inline(never) // recursive; keep stack frames predictable
     mutating func parseObject() throws(JSONParseError) -> JSON {
         assert(base[index] == UInt8(ascii: "{"))
         try incrementDepth()
         defer { depth -= 1 }
         index += 1 // consume '{'
         var object = [String: JSON]()
+        object.reserveCapacity(8)
         skipWhitespace()
         guard index < count else {
             throw error(.unexpectedEndOfInput)
@@ -233,12 +237,14 @@ internal extension JSON.Parser {
 
     // MARK: Array
 
+    @inline(never) // recursive; keep stack frames predictable
     mutating func parseArray() throws(JSONParseError) -> JSON {
         assert(base[index] == UInt8(ascii: "["))
         try incrementDepth()
         defer { depth -= 1 }
         index += 1 // consume '['
         var array = [JSON]()
+        array.reserveCapacity(8)
         skipWhitespace()
         guard index < count else {
             throw error(.unexpectedEndOfInput)
@@ -268,6 +274,7 @@ internal extension JSON.Parser {
         } while true
     }
 
+    @inline(__always)
     mutating func incrementDepth() throws(JSONParseError) {
         depth += 1
         guard depth <= options.maximumDepth else {
@@ -285,7 +292,33 @@ internal extension JSON.Parser {
             throw error(.unexpectedCharacter(base[index]))
         }
         index += 1 // consume '"'
+        let start = index
+        // fast path: scan for the closing quote; escape-free strings are
+        // decoded zero-copy directly from the input buffer
+        while index < count {
+            let byte = base[index]
+            if byte == UInt8(ascii: "\"") {
+                let string = String(decoding: UnsafeBufferPointer(start: base + start, count: index - start), as: UTF8.self)
+                index += 1
+                return string
+            }
+            if byte == UInt8(ascii: "\\") {
+                break // escape found, take the buffered slow path
+            }
+            if byte < 0x20 {
+                // unescaped control characters are invalid
+                throw error(.unexpectedCharacter(byte))
+            }
+            index += 1
+        }
+        guard index < count else {
+            throw error(.unexpectedEndOfInput)
+        }
+        // slow path: copy the escape-free prefix, then decode escapes,
+        // copying runs of plain bytes in bulk
         var utf8 = [UInt8]()
+        utf8.reserveCapacity((index - start) + min(count - index, 64))
+        utf8.append(contentsOf: UnsafeBufferPointer(start: base + start, count: index - start))
         while index < count {
             let byte = base[index]
             switch byte {
@@ -299,8 +332,17 @@ internal extension JSON.Parser {
                 // unescaped control characters are invalid
                 throw error(.unexpectedCharacter(byte))
             default:
-                utf8.append(byte)
+                // copy a run of plain bytes in one append
+                let runStart = index
                 index += 1
+                while index < count {
+                    let next = base[index]
+                    if next == UInt8(ascii: "\"") || next == UInt8(ascii: "\\") || next < 0x20 {
+                        break
+                    }
+                    index += 1
+                }
+                utf8.append(contentsOf: UnsafeBufferPointer(start: base + runStart, count: index - runStart))
             }
         }
         throw error(.unexpectedEndOfInput)
@@ -450,16 +492,17 @@ internal extension JSON.Parser {
                 index += 1
             } while index < count && isDigit(base[index])
         }
-        let string = String(decoding: UnsafeBufferPointer(start: base + start, count: index - start), as: UTF8.self)
-        if isDouble == false, let integer = Int64(string) {
+        // integer fast path — accumulate digits directly, no String allocation
+        if isDouble == false, let integer = parseInt64(start: start, end: index) {
             return .integer(integer)
         }
-        // fall back to floating point for out-of-range integers
+        // floating point, and integers out of `Int64` range
         #if hasFeature(Embedded)
         // `Double.init(String)` requires `_swift_stdlib_strtod_clocale`, which
         // the Embedded Swift runtime does not provide, so convert manually.
-        return .double(JSON.double(parsing: bytes[start ..< index]))
+        return .double(JSON.double(parsing: UnsafeBufferPointer(start: base + start, count: index - start)))
         #else
+        let string = String(decoding: UnsafeBufferPointer(start: base + start, count: index - start), as: UTF8.self)
         // - Note: Defensive guard; every number accepted by the grammar checks
         //   above parses as `Double` (huge magnitudes clamp to infinity), so
         //   this path is unreachable in practice and excluded from coverage.
@@ -470,6 +513,37 @@ internal extension JSON.Parser {
         #endif
     }
 
+    /// Parses an `Int64` from an already grammar-validated digit run,
+    /// returning `nil` on overflow.
+    @inline(__always)
+    func parseInt64(start: Int, end: Int) -> Int64? {
+        var i = start
+        var negative = false
+        if base[i] == UInt8(ascii: "-") {
+            negative = true
+            i += 1
+        }
+        var value: Int64 = 0
+        if negative {
+            // accumulate negatively to represent `Int64.min`
+            while i < end {
+                let digit = Int64(base[i] - UInt8(ascii: "0"))
+                guard value >= (Int64.min + digit) / 10 else { return nil }
+                value = value * 10 - digit
+                i += 1
+            }
+        } else {
+            while i < end {
+                let digit = Int64(base[i] - UInt8(ascii: "0"))
+                guard value <= (Int64.max - digit) / 10 else { return nil }
+                value = value * 10 + digit
+                i += 1
+            }
+        }
+        return value
+    }
+
+    @inline(__always)
     func isDigit(_ byte: UInt8) -> Bool {
         byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9")
     }
