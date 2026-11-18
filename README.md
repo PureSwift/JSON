@@ -129,5 +129,7 @@ The library itself avoids the other common Embedded linking gap: `Double.init(St
 Add to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/PureSwift/JSON.git", branch: "feature/embedded")
+.package(url: "https://github.com/PureSwift/JSON.git", from: "2.0.1")
 ```
+
+Requires macOS 15, iOS 18, tvOS 18, watchOS 11, Mac Catalyst 18 or visionOS 2 on Apple platforms, the minimums of `swift-embedded-foundation`.
