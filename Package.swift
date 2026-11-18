@@ -11,13 +11,36 @@ let enableMacros = environment["SWIFTPM_ENABLE_MACROS"] != "0"
 // index store during test discovery)
 let android = environment["TARGET_OS_ANDROID"] == "1"
 
+// The JSON parser converts floating point numbers itself under Embedded
+// Swift, so it never needs FoundationEmbedded's `strtod` shims. From Swift
+// 6.4 the standard library doesn't reference them either, so the default
+// `FloatingPointParsingShims` trait is turned off there. Earlier toolchains
+// keep it, for code that calls `Double(String)` itself.
+#if compiler(>=6.4)
+let foundationEmbedded: Package.Dependency = .package(
+    url: "https://github.com/PureSwift/swift-embedded-foundation.git",
+    branch: "master",
+    traits: []
+)
+#else
+let foundationEmbedded: Package.Dependency = .package(
+    url: "https://github.com/PureSwift/swift-embedded-foundation.git",
+    branch: "master"
+)
+#endif
+
 let package = Package(
     name: "JSON",
+    // Must match swift-embedded-foundation, which needs these minimums for
+    // `UInt128` (its UUID). SwiftPM rejects a library whose dependency
+    // requires a newer OS than it does.
     platforms: [
-        .macOS(.v10_15),
-        .iOS(.v13),
-        .watchOS(.v6),
-        .tvOS(.v13)
+        .macOS(.v15),
+        .iOS(.v18),
+        .watchOS(.v11),
+        .tvOS(.v18),
+        .macCatalyst(.v18),
+        .visionOS(.v2)
     ],
     products: [
         .library(
@@ -26,10 +49,7 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(
-            url: "https://github.com/PureSwift/swift-embedded-foundation.git",
-            branch: "master"
-        )
+        foundationEmbedded
     ],
     targets: [
         .target(
